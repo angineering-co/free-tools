@@ -57,7 +57,7 @@ interface RowUpdate {
 
 function onOpen(e) {
     var ui = SpreadsheetApp.getUi();
-    ui.createMenu("AirBnb iCal Sync")
+    ui.createMenu("iCal Sync")
         .addItem("同步預訂紀錄", "syncAllIcalLinks")
         .addToUi();
 }
