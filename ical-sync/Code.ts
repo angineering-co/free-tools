@@ -39,6 +39,22 @@ const BOOKINGS_HEADER_ROW = [
 // Value in '啟用' column to process a URL (case-insensitive) (「啟用」欄中表示要處理的值，不區分大小寫)
 const ENABLED_VALUE = "是";
 
+// Interface for parsed iCal event data
+interface IcalEvent {
+  uid?: string;
+  summary?: string;
+  status?: string;
+  dtstart?: Date | null;
+  dtend?: Date | null;
+  description?: string;
+}
+
+// Interface for row update objects
+interface RowUpdate {
+  rowIndex: number;
+  data: any[]; // Array of values for the row
+}
+
 function onOpen(e) {
     var ui = SpreadsheetApp.getUi();
     ui.createMenu("AirBnb iCal Sync")
@@ -73,9 +89,9 @@ function syncAllIcalLinks() {
   const existingBookingsData = getSheetData(bookingsSheet); // { uid: { data: [row values], rowIndex: number } }
   const scriptTimeZone = Session.getScriptTimeZone();
   const now = new Date();
-  const allRowsToAdd = [];
-  const allRowsToUpdate = []; // { rowIndex: number, data: [row values] }
-  const allProcessedUIDs = new Set();
+  const allRowsToAdd: any[][] = []; // Array of arrays (rows)
+  const allRowsToUpdate: RowUpdate[] = []; // Use the new interface here
+  const allProcessedUIDs = new Set<string>(); // Specify Set type
 
   // Iterate through configured iCal URLs (skip header row) (遍歷設定的 iCal 網址，跳過標頭列)
   for (let i = 1; i < configData.length; i++) {
@@ -114,10 +130,12 @@ function syncAllIcalLinks() {
       events.forEach(event => {
         if (!event.uid || !event.dtstart || !event.dtend) {
           Logger.log(`為 "${propertyName}" 跳過事件，因缺少 UID、DTSTART 或 DTEND： ${JSON.stringify(event)}`);
-          return;
+          return; // Use early return for clarity
         }
 
-        allProcessedUIDs.add(event.uid);
+        // Ensure uid is treated as string for the Set and map keys
+        const eventUid = String(event.uid);
+        allProcessedUIDs.add(eventUid);
 
         const checkInDate = event.dtstart;
         const checkOutDate = event.dtend;
@@ -135,9 +153,9 @@ function syncAllIcalLinks() {
           Utilities.formatDate(now, scriptTimeZone, 'yyyy-MM-dd HH:mm:ss')
         ];
 
-        if (existingBookingsData[event.uid]) {
+        if (existingBookingsData[eventUid]) {
           // Existing event: Check if update needed (已存在事件：檢查是否需要更新)
-          const existingRow = existingBookingsData[event.uid];
+          const existingRow = existingBookingsData[eventUid];
           const existingRowIndex = existingRow.rowIndex;
           const oldData = existingRow.data;
           const oldStatus = oldData[BOOKING_STATUS_COL - 1];
@@ -151,11 +169,13 @@ function syncAllIcalLinks() {
           {
              const existingUpdateIndex = allRowsToUpdate.findIndex(update => update.rowIndex === existingRowIndex);
              if (existingUpdateIndex > -1) {
+                 // Update the data of the existing update instruction
                  allRowsToUpdate[existingUpdateIndex].data = currentRowData;
-                 Logger.log(`以來自 ${propertyName} 的資料覆寫第 ${existingRowIndex} 列 (UID: ${event.uid}) 的更新指令。`);
+                 Logger.log(`以來自 ${propertyName} 的資料覆寫第 ${existingRowIndex} 列 (UID: ${eventUid}) 的更新指令。`);
              } else {
+                 // Add a new update instruction
                  allRowsToUpdate.push({ rowIndex: existingRowIndex, data: currentRowData });
-                 Logger.log(`從 ${propertyName} 標記第 ${existingRowIndex} 列 (UID: ${event.uid}) 進行更新。`);
+                 Logger.log(`從 ${propertyName} 標記第 ${existingRowIndex} 列 (UID: ${eventUid}) 進行更新。`);
              }
           } else {
              // No changes detected, but update the "Last Updated" timestamp if it's old (未偵測到變更，但如果「最後更新」時間戳記過舊則更新)
@@ -164,21 +184,24 @@ function syncAllIcalLinks() {
                  currentRowData[BOOKING_LAST_UPDATED_COL - 1] = Utilities.formatDate(now, scriptTimeZone, 'yyyy-MM-dd HH:mm:ss');
                  const existingUpdateIndex = allRowsToUpdate.findIndex(update => update.rowIndex === existingRowIndex);
                   if (existingUpdateIndex > -1) {
+                       // Only update the last updated timestamp in the existing update instruction
                        allRowsToUpdate[existingUpdateIndex].data[BOOKING_LAST_UPDATED_COL - 1] = currentRowData[BOOKING_LAST_UPDATED_COL - 1];
+                       Logger.log(`在現有更新指令中更新第 ${existingRowIndex} 列 (UID: ${eventUid}) 的「最後更新」時間戳記。`);
                    } else {
-                       allRowsToUpdate.push({ rowIndex: existingRowIndex, data: currentRowData });
-                       Logger.log(`更新第 ${existingRowIndex} 列 (UID: ${event.uid}) 的「最後更新」時間戳記。`);
+                       // Add a new update instruction just for the timestamp
+                       allRowsToUpdate.push({ rowIndex: existingRowIndex, data: currentRowData }); // Push the full row data initially
+                       Logger.log(`更新第 ${existingRowIndex} 列 (UID: ${eventUid}) 的「最後更新」時間戳記 (新增更新指令)。`);
                    }
              }
           }
         } else {
           // New event (新事件)
-           const existingAddIndex = allRowsToAdd.findIndex(newRow => newRow[BOOKING_UID_COL - 1] === event.uid);
+           const existingAddIndex = allRowsToAdd.findIndex(newRow => String(newRow[BOOKING_UID_COL - 1]) === eventUid);
            if (existingAddIndex === -1) {
                allRowsToAdd.push(currentRowData);
-               Logger.log(`從 ${propertyName} 標記新列以供添加 (UID: ${event.uid})。`);
+               Logger.log(`從 ${propertyName} 標記新列以供添加 (UID: ${eventUid})。`);
            } else {
-               Logger.log(`來自 ${propertyName} 的 UID ${event.uid} 已在此次執行中標記為新增。跳過重複新增。`);
+               Logger.log(`來自 ${propertyName} 的 UID ${eventUid} 已在此次執行中標記為新增。跳過重複新增。`);
            }
         }
       }); // End processing events for one feed
@@ -204,10 +227,12 @@ function syncAllIcalLinks() {
   // 2. Update existing rows (更新現有列)
   if (allRowsToUpdate.length > 0) {
     allRowsToUpdate.forEach(update => {
-      if (update.rowIndex > 0 && update.rowIndex <= bookingsSheet.getMaxRows()) {
+      // Add type check for update.data
+      if (update.rowIndex > 0 && update.rowIndex <= bookingsSheet.getMaxRows() && Array.isArray(update.data)) {
          bookingsSheet.getRange(update.rowIndex, 1, 1, BOOKINGS_HEADER_ROW.length).setValues([update.data]);
       } else {
-         Logger.log(`跳過無效列索引的更新： ${update.rowIndex} (UID: ${update.data ? update.data[BOOKING_UID_COL - 1] : 'N/A'})`);
+         const uidToLog = (update.data && Array.isArray(update.data)) ? String(update.data[BOOKING_UID_COL - 1]) : 'N/A';
+         Logger.log(`跳過無效列索引或資料的更新： rowIndex=${update.rowIndex} (UID: ${uidToLog})`);
       }
     });
     Logger.log(`已更新 ${allRowsToUpdate.length} 個列於 ${BOOKINGS_SHEET_NAME}。`);
@@ -218,17 +243,28 @@ function syncAllIcalLinks() {
   // 3. Handle potentially removed/cancelled events (處理可能已移除/取消的事件)
   let missingCount = 0;
   const sheetUIDs = Object.keys(existingBookingsData);
-  sheetUIDs.forEach(uid => {
+  sheetUIDs.forEach(uid => { // uid here is already a string from Object.keys
     if (!allProcessedUIDs.has(uid)) {
        const missingRowIndex = existingBookingsData[uid].rowIndex;
-       const currentStatus = bookingsSheet.getRange(missingRowIndex, BOOKING_STATUS_COL).getValue();
+       // Ensure rowIndex is valid before proceeding
+       if (missingRowIndex <= 0 || missingRowIndex > bookingsSheet.getMaxRows()) {
+           Logger.log(`事件 UID ${uid} 存在於映射中，但具有無效的列索引 ${missingRowIndex}。跳過取消檢查。`);
+           return;
+       }
+       const currentStatusRange = bookingsSheet.getRange(missingRowIndex, BOOKING_STATUS_COL);
+       const currentStatus = currentStatusRange.getValue();
        const cancelledStatusValue = translateStatus('CANCELLED'); // "已取消"
-       const possiblyCancelledStatusValue = "可能已取消?";
+       const possiblyCancelledStatusValue = translateStatus('POSSIBLY CANCELLED?'); // "可能已取消?"
 
        // Only mark as 'Possibly Cancelled?' if not already marked as cancelled or possibly cancelled.
        if (currentStatus !== cancelledStatusValue && currentStatus !== possiblyCancelledStatusValue) {
-           bookingsSheet.getRange(missingRowIndex, BOOKING_STATUS_COL).setValue(possiblyCancelledStatusValue);
-           bookingsSheet.getRange(missingRowIndex, BOOKING_LAST_UPDATED_COL).setValue(Utilities.formatDate(now, scriptTimeZone, 'yyyy-MM-dd HH:mm:ss'));
+           currentStatusRange.setValue(possiblyCancelledStatusValue);
+           // Check if last updated column exists before trying to update it
+           if (BOOKING_LAST_UPDATED_COL <= bookingsSheet.getMaxColumns()) {
+               bookingsSheet.getRange(missingRowIndex, BOOKING_LAST_UPDATED_COL).setValue(Utilities.formatDate(now, scriptTimeZone, 'yyyy-MM-dd HH:mm:ss'));
+           } else {
+               Logger.log(`警告：最後更新欄 (欄 ${BOOKING_LAST_UPDATED_COL}) 超出工作表邊界。無法更新 UID ${uid} 的時間戳記。`);
+           }
            Logger.log(`事件 UID ${uid} (列 ${missingRowIndex}) 存在於工作表中，但在任何已處理的 iCal Feed 中找不到。已標記為 '${possiblyCancelledStatusValue}'。`);
            missingCount++;
        } else {
@@ -239,7 +275,6 @@ function syncAllIcalLinks() {
   if(missingCount > 0) {
       Logger.log(`標記了 ${missingCount} 個工作表中的事件為 '${translateStatus('Possibly Cancelled?')}'，因為在任何啟用的 iCal Feed 中都找不到它們。`);
   }
-
 
   // Ensure header row exists and is correct (確保標頭列存在且正確)
   ensureHeaderRow(bookingsSheet, BOOKINGS_HEADER_ROW, BOOKING_UID_COL);
@@ -305,13 +340,13 @@ function fetchIcalData(url) {
  * Parses iCal text data into an array of event objects.
  * (將 iCal 文字資料解析為事件物件陣列。)
  * @param {string} icalText The raw iCal data.
- * @return {Array<Object>} An array of event objects.
+ * @return {Array<IcalEvent>} An array of event objects.
  */
-function parseIcalData(icalText) {
-  const events = [];
-  let currentEvent = null;
+function parseIcalData(icalText: string): IcalEvent[] {
+  const events: IcalEvent[] = [];
+  let currentEvent: IcalEvent | null = null;
   const lines = icalText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-  const unfoldedLines = [];
+  const unfoldedLines: string[] = [];
   lines.forEach(line => {
       if (line.startsWith(' ') || line.startsWith('\t')) {
           if (unfoldedLines.length > 0) unfoldedLines[unfoldedLines.length - 1] += line.substring(1);
@@ -365,7 +400,7 @@ function parseIcalData(icalText) {
  * @param {Object} params Parameters associated with the date field.
  * @return {Date|null} A Date object or null if parsing fails.
  */
-function parseIcalDate(dateString, params = {}) {
+function parseIcalDate(dateString: string, params: Record<string, string> = {}): Date | null {
   try {
     const isValueDate = params['VALUE'] === 'DATE';
     const match = dateString.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/);
@@ -389,7 +424,7 @@ function parseIcalDate(dateString, params = {}) {
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet The sheet object.
  * @return {Object} A map where keys are UIDs and values are { data: [row values], rowIndex: number }.
  */
-function getSheetData(sheet) {
+function getSheetData(sheet: GoogleAppsScript.Spreadsheet.Sheet): { [uid: string]: { data: any[], rowIndex: number } } {
   ensureHeaderRow(sheet, BOOKINGS_HEADER_ROW, BOOKING_UID_COL);
   const dataRange = sheet.getDataRange();
   if (dataRange.getNumRows() <= 1) return {};
@@ -414,7 +449,7 @@ function getSheetData(sheet) {
  * @param {Date} checkOutDate The check-out date object.
  * @return {number} The number of nights.
  */
-function calculateNights(checkInDate, checkOutDate) {
+function calculateNights(checkInDate: Date | null, checkOutDate: Date | null): number {
   if (!checkInDate || !checkOutDate || isNaN(checkInDate.getTime()) || isNaN(checkOutDate.getTime())) {
     Logger.log(`用於計算晚數的日期無效： IN=${checkInDate}, OUT=${checkOutDate}`);
     return 0;
@@ -431,7 +466,7 @@ function calculateNights(checkInDate, checkOutDate) {
  * @param {Array<String>} expectedHeaders Expected header strings.
  * @param {number} firstColIndex 1-based index of the first column.
  */
-function ensureHeaderRow(sheet, expectedHeaders, firstColIndex = 1) {
+function ensureHeaderRow(sheet: GoogleAppsScript.Spreadsheet.Sheet, expectedHeaders: string[], firstColIndex: number = 1): void {
    const headerNumCols = expectedHeaders.length;
    if (sheet.getLastRow() === 0) {
       sheet.insertRowBefore(1);
@@ -460,7 +495,7 @@ function ensureHeaderRow(sheet, expectedHeaders, firstColIndex = 1) {
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet The sheet object.
  * @param {number} sortColumnIndex The 1-based index of the column to sort by.
  */
-function sortSheet(sheet, sortColumnIndex) {
+function sortSheet(sheet: GoogleAppsScript.Spreadsheet.Sheet, sortColumnIndex: number): void {
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) {
     const range = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn());
