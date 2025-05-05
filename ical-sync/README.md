@@ -38,7 +38,7 @@ This Google Apps Script synchronizes event data from multiple iCalendar (`.ics`)
 
 *   **Manual Sync:**
     *   Open the Google Sheet.
-    *   Use the custom menu: `AirBnb iCal Sync` > `同步預訂紀錄`.
+    *   Use the custom menu: `iCal Sync` > `同步預訂紀錄`.
     *   Alternatively, open the Script Editor (`Tools` > `Script editor`), select the function `syncAllIcalLinks` from the dropdown menu, and click `Run`.
 *   **Automatic Sync (Triggers):**
     *   In the Script Editor, click the `Triggers` icon (looks like an alarm clock) in the left sidebar.
@@ -50,6 +50,10 @@ This Google Apps Script synchronizes event data from multiple iCalendar (`.ics`)
         *   Select type of time based trigger: (e.g., `Hourly timer`, `Daily timer`)
         *   Set error notification settings.
     *   Click `Save`. You may need to authorize again.
+
+## Sheets
+* [Development Sheet](https://docs.google.com/spreadsheets/d/1Ui1R1aQSZY3hZw6c-3dvfeuGS_s5VbkofaRTBsriM90/edit?usp=sharing)
+* [Production Sheet](https://docs.google.com/spreadsheets/d/1DQ2dErxDnv9WX-FqR5_MpIFT1Ywz4Ran8u6XqKRwkuk/edit?usp=sharing)
 
 ## Customization
 
