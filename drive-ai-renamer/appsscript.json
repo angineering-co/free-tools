@@ -1,0 +1,29 @@
+{
+  "timeZone": "America/New_York",
+  "dependencies": {},
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "addOns": {
+    "common": {
+      "name": "Google Drive AI File Renamer",
+      "logoUrl": "https://drive.google.com/uc?export=view&id=1RFQ1p3RBXbfPbPKEev2OWNniQwCCWo9o",
+      "layoutProperties": {
+        "primaryColor": "#4285F4",
+        "secondaryColor": "#FFFFFF"
+      }
+    },
+    "drive": {
+      "onItemsSelectedTrigger": {
+        "runFunction": "onDriveItemsSelected"
+      }
+    }
+  },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/script.container.ui",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/drive.addons.metadata.readonly"
+  ]
+}
