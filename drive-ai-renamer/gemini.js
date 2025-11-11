@@ -97,7 +97,7 @@ function uploadFileToGemini(fileBlob, filename) {
  * @param {string} userPrompt The user's instruction.
  * @param {string[]} filenames The list of old filenames.
  * @param {Array<{filename: string, mimeType: string, base64Data: string}>} fileData Optional array of file data with base64-encoded PDFs/images for content analysis.
- * @returns {string[] | null} An array of new filenames, or null on failure.
+ * @returns {string[] | {error: string, details?: string}} An array of new filenames on success, or an error object on failure.
  */
 function callGemini(userPrompt, filenames, fileData = null) {
   const apiKey = getApiKey();
@@ -190,18 +190,52 @@ function callGemini(userPrompt, filenames, fileData = null) {
     const responseCode = response.getResponseCode();
     const responseText = response.getContentText();
 
-    if (responseCode === 200) {
-      const json = JSON.parse(responseText);
-      // The Gemini API returns a complex object. We need to parse our *expected* JSON from its content.
-      // The actual response content is inside: response.candidates[0].content.parts[0].text
-      const textOutput = json.candidates[0].content.parts[0].text;
-      return JSON.parse(textOutput); // This should be our array: ["new1.pdf", "new2.doc"]
-    } else {
+    if (responseCode !== 200) {
+      // Try to extract error message from response
+      let errorDetails = responseText;
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorDetails = errorJson.error?.message || errorJson.message || responseText;
+      } catch (e) {
+        // Use raw responseText if not JSON
+      }
+      
       Logger.log(`Gemini Error ${responseCode}: ${responseText}`);
-      return null;
+      return {
+        error: `API Error (${responseCode})`,
+        details: errorDetails
+      };
     }
+
+    // Parse API response
+    const json = JSON.parse(responseText);
+    const textOutput = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    if (!textOutput) {
+      Logger.log(`No text output in API response: ${responseText}`);
+      return {
+        error: "No response from AI",
+        details: "The API response did not contain any text output."
+      };
+    }
+
+    // Parse AI response as JSON array
+    const parsedResult = JSON.parse(textOutput);
+    
+    if (!Array.isArray(parsedResult)) {
+      Logger.log(`AI response is not an array: ${textOutput}`);
+      return {
+        error: "Invalid AI response format",
+        details: `Expected a JSON array. Got: ${textOutput.substring(0, 200)}`
+      };
+    }
+
+    return parsedResult; // Success: return the array
   } catch (e) {
     Logger.log(`Exception during API call: ${e}`);
-    return null;
+    return {
+      error: "API request failed",
+      details: e.message || e.toString()
+    };
   }
 }

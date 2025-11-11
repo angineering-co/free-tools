@@ -9,27 +9,88 @@ function getApiKey() {
  * @returns {Card[]} An array of cards to display.
  */
 function onDriveItemsSelected(e) {
-  // We only want to act on a SINGLE folder.
-  // TODO: Add support for files selected in the same folder
+  const selectedItems = e.drive.selectedItems;
+
+  // Case 1: Single folder selected
   if (
-    e.drive.selectedItems.length !== 1 ||
-    e.drive.selectedItems[0].mimeType !== "application/vnd.google-apps.folder"
+    selectedItems.length === 1 &&
+    selectedItems[0].mimeType === "application/vnd.google-apps.folder"
   ) {
-    return [
-      createErrorCard("Please select a single folder to use this add-on."),
-    ];
+    const selectedFolderId = selectedItems[0].id;
+    return [buildMainRenamingCard(selectedFolderId, null)];
   }
 
-  const selectedFolderId = e.drive.selectedItems[0].id;
-  return [buildMainRenamingCard(selectedFolderId)];
+  // Case 2: Multiple files selected (must be in the same folder)
+  if (selectedItems.length > 0) {
+    // Check if all selected items are files (not folders)
+    const allAreFiles = selectedItems.every(
+      (item) => item.mimeType !== "application/vnd.google-apps.folder"
+    );
+
+    if (allAreFiles) {
+      // Get parent folders for all files and verify they're all in the same folder
+      const parentFolderIds = new Set();
+      const selectedFileIds = [];
+
+      for (let i = 0; i < selectedItems.length; i++) {
+        const item = selectedItems[i];
+        try {
+          const file = DriveApp.getFileById(item.id);
+          const parentFolders = file.getParents();
+
+          if (!parentFolders.hasNext()) {
+            return [
+              createErrorCard(
+                `File "${item.title}" is not in a folder. Please select files from a folder.`
+              ),
+            ];
+          }
+
+          const parentFolder = parentFolders.next();
+          parentFolderIds.add(parentFolder.getId());
+          selectedFileIds.push(item.id);
+        } catch (err) {
+          Logger.log(`Error processing file ${item.id}: ${err}`);
+          return [
+            createErrorCard(
+              `Error processing selected files. Please try again.`
+            ),
+          ];
+        }
+      }
+
+      // Verify all files are in the same folder
+      if (parentFolderIds.size !== 1) {
+        return [
+          createErrorCard(
+            "Please select files from the same folder, or select a single folder."
+          ),
+        ];
+      }
+
+      const folderId = Array.from(parentFolderIds)[0];
+      return [buildMainRenamingCard(folderId, selectedFileIds)];
+    }
+  }
+
+  // Invalid selection
+  return [
+    createErrorCard(
+      "Please select a single folder, or multiple files from the same folder."
+    ),
+  ];
 }
 
 /**
  * Builds the main UI card (Card 1)
- * @param {string} folderId The ID of the selected folder.
+ * @param {string} folderId The ID of the folder containing the files.
+ * @param {string[]|null} selectedFileIds Optional array of selected file IDs. If null, processes all files in folder.
  * @returns {Card}
  */
-function buildMainRenamingCard(folderId) {
+function buildMainRenamingCard(folderId, selectedFileIds) {
+
+  // TODO: Add an alert to stop the flow if more than 20 files are selected
+
   const card = CardService.newCardBuilder();
   card.setHeader(CardService.newCardHeader().setTitle("Gemini File Renamer"));
 
@@ -60,9 +121,13 @@ function buildMainRenamingCard(folderId) {
       .setValue("")
   ); // Clear the field
 
+  const saveApiKeyActionParams = { folderId: folderId };
+  if (selectedFileIds) {
+    saveApiKeyActionParams.selectedFileIds = JSON.stringify(selectedFileIds);
+  }
   const saveApiKeyAction = CardService.newAction()
     .setFunctionName("handleSaveApiKey")
-    .setParameters({ folderId: folderId });
+    .setParameters(saveApiKeyActionParams);
 
   apiKeySection.addWidget(
     CardService.newButtonSet().addButton(
@@ -86,10 +151,14 @@ function buildMainRenamingCard(folderId) {
       .setHint('e.g., "Add Project-X- prefix"')
   );
 
-  // Pass the folderId to the action handler
+  // Pass the folderId and selectedFileIds to the action handler
+  const actionParams = { folderId: folderId };
+  if (selectedFileIds) {
+    actionParams.selectedFileIds = JSON.stringify(selectedFileIds);
+  }
   const action = CardService.newAction()
     .setFunctionName("handlePreview")
-    .setParameters({ folderId: folderId });
+    .setParameters(actionParams);
 
   section.addWidget(
     CardService.newButtonSet().addButton(
@@ -128,6 +197,10 @@ function createErrorCard(text) {
 function handleSaveApiKey(e) {
   const apiKey = e.formInput.api_key;
   const folderId = e.parameters.folderId;
+  const selectedFileIdsParam = e.parameters.selectedFileIds;
+  const selectedFileIds = selectedFileIdsParam
+    ? JSON.parse(selectedFileIdsParam)
+    : null;
 
   if (!apiKey || apiKey.trim() === "") {
     return CardService.newActionResponseBuilder()
@@ -144,7 +217,8 @@ function handleSaveApiKey(e) {
   );
 
   // Rebuild the card to show updated status and clear the input field
-  const updatedCard = buildMainRenamingCard(folderId);
+  // Preserve the file selection if files were originally selected
+  const updatedCard = buildMainRenamingCard(folderId, selectedFileIds);
 
   return CardService.newActionResponseBuilder()
     .setNotification(
@@ -162,8 +236,31 @@ function handleSaveApiKey(e) {
 function handlePreview(e) {
   const prompt = e.formInput.rename_prompt;
   const folderId = e.parameters.folderId;
-  const folder = DriveApp.getFolderById(folderId);
-  const files = folder.getFiles();
+  const selectedFileIdsParam = e.parameters.selectedFileIds;
+  const selectedFileIds = selectedFileIdsParam
+    ? JSON.parse(selectedFileIdsParam)
+    : null;
+
+  let filesToProcess = [];
+
+  if (selectedFileIds) {
+    // Process only selected files
+    for (let i = 0; i < selectedFileIds.length; i++) {
+      try {
+        const file = DriveApp.getFileById(selectedFileIds[i]);
+        filesToProcess.push(file);
+      } catch (err) {
+        Logger.log(`Failed to get file ${selectedFileIds[i]}: ${err}`);
+      }
+    }
+  } else {
+    // Process all files in folder
+    const folder = DriveApp.getFolderById(folderId);
+    const files = folder.getFiles();
+    while (files.hasNext()) {
+      filesToProcess.push(files.next());
+    }
+  }
 
   let oldFilenames = [];
   let fileIds = []; // We need to save the IDs for the "execute" step
@@ -180,12 +277,12 @@ function handlePreview(e) {
     "image/jpeg",
     "image/webp",
     "image/heic",
-    "image/heif"
+    "image/heif",
   ]);
 
   // Process files: filter supported types and encode them as base64 for inline upload
-  while (files.hasNext()) {
-    const file = files.next();
+  for (let i = 0; i < filesToProcess.length; i++) {
+    const file = filesToProcess[i];
     const mimeType = file.getMimeType();
     const filename = file.getName();
 
@@ -230,7 +327,9 @@ function handlePreview(e) {
   }
 
   if (oldFilenames.length === 0) {
-    let message = "No supported files (PDFs or images) found in the folder.";
+    let message = selectedFileIds
+      ? "No supported files (PDFs or images) found in the selection."
+      : "No supported files (PDFs or images) found in the folder.";
     if (skippedFiles.length > 0) {
       message += " Skipped: " + skippedFiles.slice(0, 5).join(", ");
       if (skippedFiles.length > 5) {
@@ -243,18 +342,39 @@ function handlePreview(e) {
   }
 
   // Call the Gemini API with file content
-  const newFilenames = callGemini(prompt, oldFilenames, fileData);
+  const result = callGemini(prompt, oldFilenames, fileData);
+
+  // --- Check for errors ---
+  if (result && result.error) {
+    // API returned an error object
+    const errorMessage = result.details
+      ? `${result.error}: ${result.details}`
+      : result.error;
+    return CardService.newActionResponseBuilder()
+      .setNotification(CardService.newNotification().setText(errorMessage))
+      .build();
+  }
 
   // --- Validation ---
-  if (!newFilenames || newFilenames.length !== oldFilenames.length) {
+  if (
+    !result ||
+    !Array.isArray(result) ||
+    result.length !== oldFilenames.length
+  ) {
+    const errorMsg = !result
+      ? "No response from AI. Please try again."
+      : !Array.isArray(result)
+      ? `Expected an array but got: ${typeof result}`
+      : `Expected ${oldFilenames.length} filenames but got ${result.length}. Please try a clearer prompt.`;
+
     return CardService.newActionResponseBuilder()
       .setNotification(
-        CardService.newNotification().setText(
-          "Error: AI response was invalid. Please try a clearer prompt."
-        )
+        CardService.newNotification().setText(`Error: ${errorMsg}`)
       )
       .build();
   }
+
+  const newFilenames = result;
 
   // --- Store the mapping for the *next* step ---
   // We use CacheService because it's temporary
