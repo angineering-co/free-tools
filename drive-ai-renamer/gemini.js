@@ -2,9 +2,10 @@
  * Uploads a file to Gemini File API.
  * @param {Blob} fileBlob The file blob to upload.
  * @param {string} filename The filename.
+ * @param {string} mimeType The mime type of the file.
  * @returns {string | null} The file URI, or null on failure.
  */
-function uploadFileToGemini(fileBlob, filename) {
+function uploadFileToGemini(fileBlob, filename, mimeType) {
   const apiKey = getApiKey();
   const url = 'https://generativelanguage.googleapis.com/upload/v1beta/files?key=' + apiKey;
   
@@ -36,7 +37,7 @@ function uploadFileToGemini(fileBlob, filename) {
   const fileSeparatorBytes = Utilities.newBlob(fileSeparator).getBytes();
   
   const fileHeader = 'Content-Disposition: form-data; name="file"; filename="' + filename + '"' + CRLF +
-    'Content-Type: application/pdf' + CRLF + CRLF;
+    'Content-Type: ' + mimeType + CRLF + CRLF;
   const fileHeaderBytes = Utilities.newBlob(fileHeader).getBytes();
   
   const closingBoundary = CRLF + '--' + boundary + '--' + CRLF;
@@ -101,7 +102,7 @@ function uploadFileToGemini(fileBlob, filename) {
  */
 function callGemini(userPrompt, filenames, fileData = null) {
   const apiKey = getApiKey();
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent';
 
   // Build the prompt based on whether we have file content
   let systemPrompt;
@@ -110,10 +111,10 @@ function callGemini(userPrompt, filenames, fileData = null) {
   if (fileData && fileData.length > 0) {
     // We have file content - instruct Gemini to analyze the files
     systemPrompt = `
-      You are a file renaming assistant. You will be given a user's rule, a JSON list of filenames, and the actual file contents (PDFs and/or images).
+      You are a file renaming assistant. You will be given a user's rule, a JSON list of filenames, and the actual file contents (PDFs, images, or text extracts).
       Your job is to analyze the file contents and apply the rule to EVERY filename, returning ONLY a valid JSON array of the new names, in the exact same order.
       
-      - Analyze the content of each file (PDFs and images) to extract relevant information for renaming.
+      - Analyze the content of each file (PDFs, images, or text extracts) to extract relevant information for renaming.
       - Apply the user's rule based on the file content.
       - Do not add any commentary.
       - Do not add markdown (like \`\`\`json).
@@ -138,6 +139,11 @@ function callGemini(userPrompt, filenames, fileData = null) {
             "mimeType": file.mimeType,
             "data": file.base64Data
           }
+        });
+      } else if (file.textContent) {
+        // Handle text content (from Docs/Sheets)
+        parts.push({
+          "text": `\n--- File Content for "${file.filename}" ---\n${file.textContent}\n--- End of Content ---\n`
         });
       }
     });

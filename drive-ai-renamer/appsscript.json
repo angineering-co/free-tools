@@ -5,10 +5,10 @@
   "runtimeVersion": "V8",
   "addOns": {
     "common": {
-      "name": "Google Drive AI File Renamer",
-      "logoUrl": "https://drive.google.com/uc?export=view&id=1RFQ1p3RBXbfPbPKEev2OWNniQwCCWo9o",
+      "name": "AI File Renamer",
+      "logoUrl": "https://drive.google.com/file/d/16m53TOtGw1fVyZczslQ5hcsJ3kvouLuW/view",
       "layoutProperties": {
-        "primaryColor": "#4285F4",
+        "primaryColor": "#2A4265",
         "secondaryColor": "#FFFFFF"
       }
     },
@@ -20,10 +20,13 @@
   },
   "oauthScopes": [
     "https://www.googleapis.com/auth/script.container.ui",
-    "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/script.external_request",
-    "https://www.googleapis.com/auth/drive.addons.metadata.readonly"
+    "https://www.googleapis.com/auth/drive.addons.metadata.readonly",
+    "https://www.googleapis.com/auth/documents.readonly",
+    "https://www.googleapis.com/auth/spreadsheets.readonly"
+  ],
+  "urlFetchWhitelist": [
+    "https://generativelanguage.googleapis.com/"
   ]
 }
