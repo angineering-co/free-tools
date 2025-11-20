@@ -140,6 +140,48 @@ function buildMainRenamingCard(folderId, selectedFileIds) {
 
   card.addSection(apiKeySection);
 
+  // License Key Section (New)
+  const licenseSection = CardService.newCardSection();
+  licenseSection.setHeader("Pro License (Optional)");
+
+  const hasLicense = LicenseService.hasValidLicense();
+  if (hasLicense) {
+    licenseSection.addWidget(
+      CardService.newTextParagraph().setText(
+        '<font color="#34a853">✓ Pro License Active (Unlimited Files)</font>'
+      )
+    );
+  } else {
+    licenseSection.addWidget(
+      CardService.newTextParagraph().setText(
+        'Free version limited to 10 files per batch. <a href="https://example.com/buy">Buy Pro Key</a>'
+      )
+    );
+  }
+
+  licenseSection.addWidget(
+    CardService.newTextInput()
+      .setFieldName("license_key")
+      .setTitle("License Key")
+      .setHint("Enter Pro License Key (starts with PRO-)")
+      .setValue("")
+  );
+
+  const saveLicenseAction = CardService.newAction()
+    .setFunctionName("handleSaveLicenseKey")
+    .setParameters(saveApiKeyActionParams); // Reuse params to keep context
+
+  licenseSection.addWidget(
+    CardService.newButtonSet().addButton(
+      CardService.newTextButton()
+        .setText("Save License")
+        .setOnClickAction(saveLicenseAction)
+        .setTextButtonStyle(CardService.TextButtonStyle.FILLED)
+    )
+  );
+
+  card.addSection(licenseSection);
+
   // Renaming Section
   const section = CardService.newCardSection();
   section.setHeader("Rename Files");
@@ -229,6 +271,49 @@ function handleSaveApiKey(e) {
 }
 
 /**
+ * Called when the "Save License" button is clicked.
+ * @param {Object} e The event object.
+ * @returns {ActionResponse}
+ */
+function handleSaveLicenseKey(e) {
+  const licenseKey = e.formInput.license_key;
+  const folderId = e.parameters.folderId;
+  const selectedFileIdsParam = e.parameters.selectedFileIds;
+  const selectedFileIds = selectedFileIdsParam
+    ? JSON.parse(selectedFileIdsParam)
+    : null;
+
+  if (!licenseKey || licenseKey.trim() === "") {
+    return CardService.newActionResponseBuilder()
+      .setNotification(
+        CardService.newNotification().setText("Please enter a license key.")
+      )
+      .build();
+  }
+
+  if (!LicenseService.validateLicenseKey(licenseKey)) {
+    return CardService.newActionResponseBuilder()
+      .setNotification(
+        CardService.newNotification().setText("Invalid license key. It should start with PRO-")
+      )
+      .build();
+  }
+
+  // Store the License key
+  LicenseService.saveLicenseKey(licenseKey);
+
+  // Rebuild the card
+  const updatedCard = buildMainRenamingCard(folderId, selectedFileIds);
+
+  return CardService.newActionResponseBuilder()
+    .setNotification(
+      CardService.newNotification().setText("License key saved! Unlimited access unlocked.")
+    )
+    .setNavigation(CardService.newNavigation().updateCard(updatedCard))
+    .build();
+}
+
+/**
  * Called when the "Preview Renames" button is clicked.
  * @param {Object} e The event object.
  * @returns {ActionResponse}
@@ -262,6 +347,18 @@ function handlePreview(e) {
     }
   }
 
+  // --- Check License Limit ---
+  const limit = LicenseService.getFileLimit();
+  if (filesToProcess.length > limit) {
+    return CardService.newActionResponseBuilder()
+      .setNotification(
+        CardService.newNotification().setText(
+          `Free version limited to ${limit} files. You selected ${filesToProcess.length}. Please upgrade or select fewer files.`
+        )
+      )
+      .build();
+  }
+
   let oldFilenames = [];
   let fileIds = []; // We need to save the IDs for the "execute" step
   let fileData = []; // Store file data for Gemini (PDFs and images) - base64 encoded
@@ -280,64 +377,82 @@ function handlePreview(e) {
     "image/heif",
   ]);
 
-  // Process files: filter supported types and encode them as base64 for inline upload
+  // Process files
   for (let i = 0; i < filesToProcess.length; i++) {
     const file = filesToProcess[i];
     const mimeType = file.getMimeType();
     const filename = file.getName();
 
-    // Only process supported file types (PDFs and images)
-    if (!SUPPORTED_MIME_TYPES.has(mimeType)) {
-      skippedFiles.push(filename);
-      continue;
-    }
+    // Always add to the list to be renamed
+    oldFilenames.push(filename);
+    fileIds.push(file.getId());
 
-    // Check per-file size limit
-    const fileSize = file.getSize();
-    if (fileSize > MAX_FILE_SIZE) {
-      skippedFiles.push(filename + " (too large)");
-      continue;
-    }
-
-    // Read file and encode as base64 for inline upload
-    try {
-      const fileBlob = file.getBlob();
-      const base64Data = Utilities.base64Encode(fileBlob.getBytes());
-
-      // Check total size limit (base64 encoding increases size by ~33%)
-      // We check the actual encoded size since that's what's sent in the request
-      const encodedSize = base64Data.length;
-      if (totalEncodedSize + encodedSize > MAX_TOTAL_SIZE) {
-        skippedFiles.push(filename + " (total size limit exceeded)");
-        continue;
+    // Try to get content if supported
+    if (SUPPORTED_MIME_TYPES.has(mimeType)) {
+      // Check per-file size limit
+      const fileSize = file.getSize();
+      if (fileSize > MAX_FILE_SIZE) {
+        // Too large to send content, but we still rename based on filename
+        continue; 
       }
 
-      totalEncodedSize += encodedSize;
-      oldFilenames.push(filename);
-      fileIds.push(file.getId());
-      fileData.push({
-        filename: filename,
-        mimeType: mimeType,
-        base64Data: base64Data,
-      });
-    } catch (err) {
-      Logger.log(`Failed to process file ${filename}: ${err}`);
-      skippedFiles.push(filename + " (processing failed)");
+      // Read file and encode as base64 for inline upload
+      try {
+        const fileBlob = file.getBlob();
+        const base64Data = Utilities.base64Encode(fileBlob.getBytes());
+
+        // Check total size limit
+        const encodedSize = base64Data.length;
+        if (totalEncodedSize + encodedSize > MAX_TOTAL_SIZE) {
+          // Total size exceeded, skip content but keep for renaming
+          continue;
+        }
+
+        totalEncodedSize += encodedSize;
+
+        fileData.push({
+          filename: filename,
+          mimeType: mimeType,
+          base64Data: base64Data,
+        });
+      } catch (err) {
+        Logger.log(`Failed to process file content ${filename}: ${err}`);
+        // If content processing fails, we just proceed without content
+      }
+    } else if (mimeType === "application/vnd.google-apps.document") {
+      // Handle Google Docs
+      try {
+        const textContent = extractDocText(file.getId());
+        if (textContent) {
+          fileData.push({
+            filename: filename,
+            mimeType: mimeType,
+            textContent: textContent
+          });
+        }
+      } catch (err) {
+        Logger.log(`Failed to extract text from Doc ${filename}: ${err}`);
+      }
+    } else if (mimeType === "application/vnd.google-apps.spreadsheet") {
+      // Handle Google Sheets
+      try {
+        const textContent = extractSheetText(file.getId());
+        if (textContent) {
+          fileData.push({
+            filename: filename,
+            mimeType: mimeType,
+            textContent: textContent
+          });
+        }
+      } catch (err) {
+        Logger.log(`Failed to extract text from Sheet ${filename}: ${err}`);
+      }
     }
   }
 
   if (oldFilenames.length === 0) {
-    let message = selectedFileIds
-      ? "No supported files (PDFs or images) found in the selection."
-      : "No supported files (PDFs or images) found in the folder.";
-    if (skippedFiles.length > 0) {
-      message += " Skipped: " + skippedFiles.slice(0, 5).join(", ");
-      if (skippedFiles.length > 5) {
-        message += " and " + (skippedFiles.length - 5) + " more.";
-      }
-    }
     return CardService.newActionResponseBuilder()
-      .setNotification(CardService.newNotification().setText(message))
+      .setNotification(CardService.newNotification().setText("No files found to process."))
       .build();
   }
 
@@ -384,11 +499,6 @@ function handlePreview(e) {
     newNames: newFilenames,
   };
   cache.put("renameMap", JSON.stringify(renameMap), 300); // Store for 5 mins
-
-  // Store skipped files info for display
-  if (skippedFiles.length > 0) {
-    cache.put("skippedFiles", JSON.stringify(skippedFiles), 300);
-  }
 
   // Build the Preview Card (Card 2)
   const previewCard = buildPreviewCard(
@@ -524,4 +634,30 @@ function handleExecuteRename(e) {
   return CardService.newActionResponseBuilder()
     .setNavigation(CardService.newNavigation().pushCard(card))
     .build();
+}
+
+/**
+ * Extracts text from a Google Doc.
+ * @param {string} fileId
+ * @returns {string} The first 2000 characters of text.
+ */
+function extractDocText(fileId) {
+  const doc = DocumentApp.openById(fileId);
+  const text = doc.getBody().getText();
+  return text.substring(0, 2000); // Limit context
+}
+
+/**
+ * Extracts text from a Google Sheet (first sheet only).
+ * @param {string} fileId
+ * @returns {string} CSV representation of the first sheet (limited).
+ */
+function extractSheetText(fileId) {
+  const ss = SpreadsheetApp.openById(fileId);
+  const sheet = ss.getSheets()[0];
+  // Get data from a reasonable range (e.g., A1:Z50) to avoid huge payloads
+  const data = sheet.getRange(1, 1, Math.min(sheet.getLastRow(), 50), Math.min(sheet.getLastColumn(), 20)).getValues();
+  
+  // Convert to CSV-like string
+  return data.map(row => row.join(",")).join("\n");
 }
